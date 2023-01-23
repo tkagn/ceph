@@ -768,12 +768,12 @@ int RGWSelectObj_ObjStore_S3::csv_processing(bufferlist& bl, off_t ofs, off_t le
     for(auto& it : bl.buffers()) {
       ldpp_dout(this, 10) << "processing segment " << i << " out of " << bl_len << " off " << ofs
                           << " len " << len << " obj-size " << m_object_size_for_processing << dendl;
-      if(it.length() || len == 0){
+      if(it.length() == 0 || len == 0){
         ldpp_dout(this, 10) << "s3select:it->_len is zero. segment " << i << " out of " << bl_len
                             <<  " obj-size " << m_object_size_for_processing << dendl;
         continue;
       }
-      m_aws_response_handler.update_processed_size(len);
+      m_aws_response_handler.update_processed_size(it.length());
       status = run_s3select_on_csv(m_sql_query.c_str(), &(it)[0], it.length());
       if(status<0) {
 	return -EINVAL;
