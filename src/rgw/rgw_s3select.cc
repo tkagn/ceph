@@ -388,7 +388,8 @@ int RGWSelectObj_ObjStore_S3::run_s3select_on_csv(const char* query, const char*
     m_aws_response_handler.send_error_response(s3select_syntax_error,
         s3select_syntax.get_error_description().c_str(),
         s3select_resource_id);
-    ldpp_dout(this, 10) << "s3-select query: failed to prase query; {" << s3select_syntax.get_error_description() << "}" << dendl;
+    ldpp_dout(this, 10) << "s3-select query: failed to prase the following query {" << query << "}" << dendl;
+    ldpp_dout(this, 10) << "s3-select query: syntax-error {" << s3select_syntax.get_error_description() << "}" << dendl;
     return -1;
   } else {
     if (input == nullptr) {
@@ -422,6 +423,8 @@ int RGWSelectObj_ObjStore_S3::run_s3select_on_csv(const char* query, const char*
   }
   if (length_post_processing-length_before_processing != 0) {
     m_aws_response_handler.send_success_response();
+    ldpp_dout(this, 10) << "s3-select: sql-result-size = " << m_aws_response_handler.get_sql_result().size() << dendl;
+    ldpp_dout(this, 10) << "s3-select: sql-result{" << m_aws_response_handler.get_sql_result() << "}" << dendl;
   } else {
     m_aws_response_handler.send_continuation_response();
   }
@@ -567,11 +570,20 @@ int RGWSelectObj_ObjStore_S3::handle_aws_cli_parameters(std::string& sql_query)
   }
 #define GT "&gt;"
 #define LT "&lt;"
+#define APOS "&apos;"
+#define NE "<>" //TEMP. sould be done upon statement parsing.
+
   if (m_s3select_query.find(GT) != std::string::npos) {
     boost::replace_all(m_s3select_query, GT, ">");
   }
   if (m_s3select_query.find(LT) != std::string::npos) {
     boost::replace_all(m_s3select_query, LT, "<");
+  }
+  if (m_s3select_query.find(APOS) != std::string::npos) {
+    boost::replace_all(m_s3select_query, APOS, "'");
+  }
+  if (m_s3select_query.find(NE) != std::string::npos) {
+    boost::replace_all(m_s3select_query, NE, std::string("!="));
   }
   //AWS cli s3select parameters
   if (m_s3select_query.find(input_tag+"><CSV") != std::string::npos) {
@@ -753,7 +765,11 @@ int RGWSelectObj_ObjStore_S3::parquet_processing(bufferlist& bl, off_t ofs, off_
 int RGWSelectObj_ObjStore_S3::csv_processing(bufferlist& bl, off_t ofs, off_t len)
 {
   int status = 0;
-  
+ //TODO: should be done on statement parser
+  if(m_sql_query[ m_sql_query.size() - 1 ] == ' ') {
+    m_sql_query[ m_sql_query.size() - 1 ] = ';';
+  }
+ 
   if (s->obj_size == 0 || m_object_size_for_processing == 0) {
     status = run_s3select_on_csv(m_sql_query.c_str(), nullptr, 0);
     if (status<0){
@@ -772,7 +788,7 @@ int RGWSelectObj_ObjStore_S3::csv_processing(bufferlist& bl, off_t ofs, off_t le
       }
       //NOTE: the it.length() must be used (not len)
       m_aws_response_handler.update_processed_size(it.length());
-      status = run_s3select_on_csv(m_sql_query.c_str(), &(it)[0], it.length());
+      status = run_s3select_on_csv(m_sql_query.c_str(), &(it)[0] +ofs, len);//it.length());
       if (status<0) {
 	return -EINVAL;
       }
