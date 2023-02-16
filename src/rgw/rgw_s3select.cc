@@ -788,7 +788,13 @@ int RGWSelectObj_ObjStore_S3::csv_processing(bufferlist& bl, off_t ofs, off_t le
       }
       //NOTE: the it.length() must be used (not len)
       m_aws_response_handler.update_processed_size(it.length());
-      status = run_s3select_on_csv(m_sql_query.c_str(), &(it)[0] +ofs, len);//it.length());
+
+      if((ofs + len) > it.length()){
+	ldpp_dout(this, 10) << "offset and lenghth may cause invalid read: ofs = " << ofs << " len = " << len << " it.length() = " << it.length() << dendl;
+	ofs = 0;
+	len = it.length();
+      }
+      status = run_s3select_on_csv(m_sql_query.c_str(), &(it)[0] +ofs, len);
       if (status<0) {
 	return -EINVAL;
       }
