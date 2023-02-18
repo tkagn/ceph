@@ -208,6 +208,7 @@ private:
   std::function<int(std::string&)> fp_result_header_format;
   std::function<int(std::string&)> fp_s3select_result_format;
   std::function<void(const char*)> fp_debug_mesg;
+  std::function<void(void)> fp_chunked_transfer_encoding;
   int m_header_size;
 
 public:

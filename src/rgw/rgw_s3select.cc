@@ -36,7 +36,7 @@ uint64_t aws_response_handler::get_total_bytes_returned()
 
 void aws_response_handler::update_total_bytes_returned(uint64_t value)
 {
-  total_bytes_returned += value;
+  total_bytes_returned = value;
 }
 
 void aws_response_handler::push_header(const char* header_name, const char* header_value)
@@ -287,12 +287,26 @@ RGWSelectObj_ObjStore_S3::RGWSelectObj_ObjStore_S3():
     return 0;
   };
   fp_s3select_result_format = [this](std::string& result) {
+    fp_chunked_transfer_encoding();
     m_aws_response_handler.send_success_response();
     return 0;
   };
 
   fp_debug_mesg = [&](const char* mesg){
     ldpp_dout(this, 10) << mesg << dendl;
+  };
+
+  fp_chunked_transfer_encoding = [&](void){
+    if (chunk_number == 0) { 
+      if (op_ret < 0) { 
+        set_req_state_err(s, op_ret); 
+      } 
+      dump_errno(s); 
+      // Explicitly use chunked transfer encoding so that we can stream the result
+      // to the user without having to wait for the full length of it.
+      end_header(s, this, "application/xml", CHUNKED_TRANSFER_ENCODING); 
+    } 
+    chunk_number++; 
   };
 }
 
@@ -381,8 +395,9 @@ int RGWSelectObj_ObjStore_S3::run_s3select_on_csv(const char* query, const char*
   } else if(m_header_info.compare("USE")==0) {
     csv.use_header_info=true;
   }
+  //m_s3_csv_object.set_external_debug_system(fp_debug_mesg);
+  m_s3_csv_object.set_result_formatters(fp_s3select_result_format,fp_result_header_format);
   m_s3_csv_object.set_csv_query(&s3select_syntax, csv);
-  m_aws_response_handler.init_response();
   if (s3select_syntax.get_error_description().empty() == false) {
     //error-flow (syntax-error)
     m_aws_response_handler.send_error_response(s3select_syntax_error,
@@ -395,12 +410,13 @@ int RGWSelectObj_ObjStore_S3::run_s3select_on_csv(const char* query, const char*
     if (input == nullptr) {
       input = "";
     }
-    m_aws_response_handler.init_success_response();
-    length_before_processing = (m_aws_response_handler.get_sql_result()).size();
+    fp_result_header_format(m_aws_response_handler.get_sql_result());
+    length_before_processing = m_s3_csv_object.get_return_result_size();
     //query is correct(syntax), processing is starting.
     status = m_s3_csv_object.run_s3select_on_stream(m_aws_response_handler.get_sql_result(), input, input_length, m_object_size_for_processing);
-    length_post_processing = (m_aws_response_handler.get_sql_result()).size();
-    m_aws_response_handler.update_total_bytes_returned(length_post_processing-length_before_processing);
+    length_post_processing = m_s3_csv_object.get_return_result_size();
+    m_aws_response_handler.update_total_bytes_returned( m_s3_csv_object.get_return_result_size() );
+
     if (status < 0) {
       //error flow(processing-time)
       m_aws_response_handler.send_error_response(s3select_processTime_error,
@@ -409,26 +425,16 @@ int RGWSelectObj_ObjStore_S3::run_s3select_on_csv(const char* query, const char*
       ldpp_dout(this, 10) << "s3-select query: failed to process query; {" << m_s3_csv_object.get_error_description() << "}" << dendl;
       return -1;
     }
-    if (chunk_number == 0) {
-      //success flow
-      if (op_ret < 0) {
-        set_req_state_err(s, op_ret);
-      }
-      dump_errno(s);
-      // Explicitly use chunked transfer encoding so that we can stream the result
-      // to the user without having to wait for the full length of it.
-      end_header(s, this, "application/xml", CHUNKED_TRANSFER_ENCODING);
-    }
-    chunk_number++;
+
   }
-  if (length_post_processing-length_before_processing != 0) {
-    m_aws_response_handler.send_success_response();
+  if ((length_post_processing-length_before_processing) != 0) {
     ldpp_dout(this, 10) << "s3-select: sql-result-size = " << m_aws_response_handler.get_sql_result().size() << dendl;
     ldpp_dout(this, 10) << "s3-select: sql-result{" << m_aws_response_handler.get_sql_result() << "}" << dendl;
   } else {
     m_aws_response_handler.send_continuation_response();
   }
   if (enable_progress == true) {
+    fp_chunked_transfer_encoding();
     m_aws_response_handler.init_progress_response();
     m_aws_response_handler.send_progress_response();
   }
@@ -442,7 +448,7 @@ int RGWSelectObj_ObjStore_S3::run_s3select_on_parquet(const char* query)
   if (!m_s3_parquet_object.is_set()) {
     //parsing the SQL statement
     s3select_syntax.parse_query(m_sql_query.c_str());
-    m_s3_parquet_object.set_external_debug_system(fp_debug_mesg);
+    //m_s3_parquet_object.set_external_debug_system(fp_debug_mesg);
     try {
       //at this stage the Parquet-processing requires for the meta-data that reside on Parquet object 
       m_s3_parquet_object.set_parquet_object(std::string("s3object"), &s3select_syntax, &m_rgw_api);
@@ -536,17 +542,7 @@ int RGWSelectObj_ObjStore_S3::run_s3select_on_json(const char* query, const char
     ldpp_dout(this, 10) << "s3-select query: failed to process query; {" << m_s3_json_object.get_error_description() << "}" << dendl;
     return -EINVAL;
   }
-  if (chunk_number == 0) {
-    //success flow
-    if (op_ret < 0) {
-      set_req_state_err(s, op_ret);
-    }
-    dump_errno(s);
-    // Explicitly use chunked transfer encoding so that we can stream the result
-    // to the user without having to wait for the full length of it.
-    end_header(s, this, "application/xml", CHUNKED_TRANSFER_ENCODING);
-  }
-  chunk_number++;
+  fp_chunked_transfer_encoding();
 
   if (length_post_processing-length_before_processing != 0) {
     m_aws_response_handler.send_success_response();
@@ -571,7 +567,6 @@ int RGWSelectObj_ObjStore_S3::handle_aws_cli_parameters(std::string& sql_query)
 #define GT "&gt;"
 #define LT "&lt;"
 #define APOS "&apos;"
-#define NE "<>" //TEMP. sould be done upon statement parsing.
 
   if (m_s3select_query.find(GT) != std::string::npos) {
     boost::replace_all(m_s3select_query, GT, ">");
@@ -581,9 +576,6 @@ int RGWSelectObj_ObjStore_S3::handle_aws_cli_parameters(std::string& sql_query)
   }
   if (m_s3select_query.find(APOS) != std::string::npos) {
     boost::replace_all(m_s3select_query, APOS, "'");
-  }
-  if (m_s3select_query.find(NE) != std::string::npos) {
-    boost::replace_all(m_s3select_query, NE, std::string("!="));
   }
   //AWS cli s3select parameters
   if (m_s3select_query.find(input_tag+"><CSV") != std::string::npos) {
@@ -728,18 +720,7 @@ void RGWSelectObj_ObjStore_S3::execute(optional_yield y)
 
 int RGWSelectObj_ObjStore_S3::parquet_processing(bufferlist& bl, off_t ofs, off_t len)
 {
-    if (chunk_number == 0) {
-      if (op_ret < 0) {
-        set_req_state_err(s, op_ret);
-      }
-      dump_errno(s);
-    }
-    // Explicitly use chunked transfer encoding so that we can stream the result
-    // to the user without having to wait for the full length of it.
-    if (chunk_number == 0) {
-      end_header(s, this, "application/xml", CHUNKED_TRANSFER_ENCODING);
-    }
-    chunk_number++;
+    fp_chunked_transfer_encoding();
     size_t append_in_callback = 0;
     int part_no = 1;
     //concat the requested buffer
@@ -765,10 +746,6 @@ int RGWSelectObj_ObjStore_S3::parquet_processing(bufferlist& bl, off_t ofs, off_
 int RGWSelectObj_ObjStore_S3::csv_processing(bufferlist& bl, off_t ofs, off_t len)
 {
   int status = 0;
- //TODO: should be done on statement parser
-  if(m_sql_query[ m_sql_query.size() - 1 ] == ' ') {
-    m_sql_query[ m_sql_query.size() - 1 ] = ';';
-  }
  
   if (s->obj_size == 0 || m_object_size_for_processing == 0) {
     status = run_s3select_on_csv(m_sql_query.c_str(), nullptr, 0);
