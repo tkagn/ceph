@@ -571,6 +571,68 @@ JSON
 
          | TODO : relevant example for object and array values.
 
+a JSON query example
+--------------------
+
+::
+
+ {
+  "firstName": "Joe",
+  "lastName": "Jackson",
+  "gender": "male",
+  "age": "twenty",
+  "address": {
+  "streetAddress": "101",
+  "city": "San Diego",
+  "state": "CA"
+  },
+
+  "firstName": "Joe_2",
+  "lastName": "Jackson_2",
+  "gender": "male",
+  "age": 21,
+  "address": {
+  "streetAddress": "101",
+  "city": "San Diego",
+  "state": "CA"
+  },
+
+  "phoneNumbers": [
+    { "type": "home1", "number": "734928_1","addr": 11 },
+    { "type": "home2", "number": "734928_2","addr": 22 },
+    { "type": "home3", "number": "734928_3","addr": 33 },
+    { "type": "home4", "number": "734928_4","addr": 44 },
+    { "type": "home5", "number": "734928_5","addr": 55 },
+    { "type": "home6", "number": "734928_6","addr": 66 },
+    { "type": "home7", "number": "734928_7","addr": 77 },
+    { "type": "home8", "number": "734928_8","addr": 88 },
+    { "type": "home9", "number": "734928_9","addr": 99 },
+    { "type": "home10", "number": "734928_10","addr": 100 }
+  ],
+
+  "key_after_array": "XXX",
+
+  "description" : {
+    "main_desc" : "value_1",
+    "second_desc" : "value_2"
+  }
+ }
+
+  # the from-clause define a single row.
+  # _1 points to root object level.
+  # _1.age appears twice in Documnet-row, the last value is used for the operation.  
+  query = "select _1.firstname,_1.key_after_array,_1.age+4,_1.description.main_desc,_1.description.second_desc from s3object[*];";
+  expected_result = Joe_2,XXX,25,value_1,value_2
+
+
+  # the from-clause points the phonenumbers array (it defines the _1)
+  # each element in phoneNumbers array define a row. 
+  # in this case each element is an object contains 3 keys/values.
+  # the query "can not access" values outside phonenumbers array, the query can access only values appears on _1.phonenumbers path.
+  query = "select cast(substring(_1.number,1,6) as int) *10 from s3object[*].phonenumbers where _1.type='home2';";
+  expected_result = 7349280  
+
+
 BOTO3
 -----
 
